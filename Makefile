@@ -99,12 +99,15 @@ flash: all
 	  cp build/pico2homekit.uf2 /Volumes/RPI-RP2/
 	@echo "Flashed. Run 'make monitor' to watch the log."
 
-# Waits for the Pico's serial port. Quit screen with Ctrl-A then K.
+# Waits for the Pico's serial port and opens it in minicom (quit: Ctrl-A then X).
+# -o: no modem init strings.
 monitor:
-	@for i in $$(seq 1 40); do ls /dev/tty.usbmodem* >/dev/null 2>&1 && break; sleep 0.25; done
-	@port=$$(ls /dev/tty.usbmodem* 2>/dev/null | head -1); \
+	@for i in $$(seq 1 40); do ls /dev/cu.usbmodem* >/dev/null 2>&1 && break; sleep 0.25; done
+	@port=$$(ls /dev/cu.usbmodem* 2>/dev/null | head -1); \
 	  if [ -z "$$port" ]; then echo "No Pico serial port found (still in BOOTSEL, or not plugged in?)"; exit 1; fi; \
-	  screen $$port 115200
+	  minicom=$$(command -v minicom || ls /opt/local/bin/minicom /opt/homebrew/bin/minicom /usr/local/bin/minicom 2>/dev/null | head -1); \
+	  if [ -z "$$minicom" ]; then echo "minicom not found: install it (MacPorts or Homebrew), or use 'make log'"; exit 1; fi; \
+	  $$minicom -D $$port -b 115200 -o
 
 # Read-only serial log: no keyboard input, keeps going when the Pico reboots or is
 # replugged. Stop with Ctrl-C.

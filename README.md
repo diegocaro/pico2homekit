@@ -59,6 +59,10 @@ Step-by-step install instructions: [SETUP.md](SETUP.md). Everything lives in `~/
 
 (The official Arm GCC macOS x86_64 builds need Homebrew's `libzstd`, which is why xPack is used.)
 
+`make monitor` also needs [minicom](https://salsa.debian.org/minicom-team/minicom), from
+MacPorts (`sudo port install minicom`) or Homebrew (`brew install minicom`). `make log` works
+without it.
+
 ## Configure
 
 ```bash
@@ -75,7 +79,7 @@ thermometer, its name, MAC and bind key.
 /usr/bin/make test       # host unit tests for the MiBeacon parser
 /usr/bin/make hap-test   # HomeKit server on this Mac vs. an independent Python controller
 /usr/bin/make flash      # reboots a running Pico into BOOTSEL itself; first time, hold BOOTSEL while plugging in
-/usr/bin/make monitor    # serial log; quit with Ctrl-A then K
+/usr/bin/make monitor    # serial console in minicom (needs minicom installed); quit with Ctrl-A then X
 /usr/bin/make log        # read-only serial log that survives reboots; stop with Ctrl-C
 ```
 
