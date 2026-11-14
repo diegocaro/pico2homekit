@@ -6,7 +6,18 @@ HomeKit natively over Wi-Fi. Plain C on the Pico SDK.
 
 Status:
 - [x] BLE scan + MiBeacon decryption, Wi-Fi connect (prints readings over USB serial)
-- [ ] HomeKit Accessory Protocol server (bridge with temperature/humidity/battery)
+- [x] HomeKit Accessory Protocol server: a bridge with one accessory per thermometer
+      (temperature, humidity, battery level, low-battery alert), paired with an iPhone
+
+How it fits together:
+
+| Part | Files |
+|---|---|
+| BLE scan, MiBeacon decryption | `src/main.c`, `src/mibeacon.c`, `src/sensors.c` |
+| HomeKit protocol core (HTTP, SRP pairing, sessions, events) | `src/hap/` |
+| Accessory layout (what Home shows) | `src/bridge.c` |
+| Pico networking, mDNS, flash storage | `src/hap_port_pico.c` |
+| Crypto: Monocypher (Ed25519, X25519, ChaCha20-Poly1305, SHA-512); mbedTLS (bignum for SRP, AES-CCM) | `third_party/monocypher/`, Pico SDK |
 
 ## Toolchain (macOS, no Homebrew, no sudo)
 
@@ -27,16 +38,41 @@ Step-by-step install instructions: [SETUP.md](SETUP.md). Everything lives in `~/
 cp config/config.example.h config/config.h   # git-ignored
 ```
 
-Fill in Wi-Fi credentials and, for each thermometer, its name, MAC and bind key.
+Fill in Wi-Fi credentials, a HomeKit setup code of your choice (`XXX-XX-XXX`) and, for each
+thermometer, its name, MAC and bind key.
 
 ## Build, flash, watch
 
 ```bash
 /usr/bin/make            # build/pico2homekit.uf2
 /usr/bin/make test       # host unit tests for the MiBeacon parser
+/usr/bin/make hap-test   # HomeKit server on this Mac vs. an independent Python controller
 /usr/bin/make flash      # reboots a running Pico into BOOTSEL itself; first time, hold BOOTSEL while plugging in
 /usr/bin/make monitor    # serial log; quit with Ctrl-A then K
 ```
+
+## Add it to Apple Home
+
+1. Home app: **+**, then **Add Accessory**, then **More options…**, then **Pico Bridge**.
+2. iOS warns it is an uncertified accessory: **Add Anyway**.
+3. Enter the setup code from `config/config.h` (also printed at boot). The step after
+   the code takes about 8 seconds on the Pico.
+
+The first boot after changing the setup code takes about 15 seconds longer (self-test and
+SRP verifier). Pairings are kept in flash across reboots and reflashes.
+
+Commands you can type in `make monitor`:
+
+| Command | Effect |
+|---|---|
+| `status` | setup code, device id, pairings, open sessions |
+| `debug` | toggle the protocol log: every request, pairing TLV items, responses, events |
+| `selftest` | re-run the SRP known-answer test (about 12 s; pauses HomeKit meanwhile) |
+| `unpair` | forget all controllers (then add the bridge again in Home) |
+| `reset` | new HomeKit identity; Home sees a brand-new accessory |
+
+If Home shows the bridge as "No Response" forever after you removed it from Home while the
+Pico was off, run `unpair` and add it again.
 
 ## Read the thermometers from the Mac (no Pico)
 

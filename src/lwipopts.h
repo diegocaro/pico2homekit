@@ -8,7 +8,7 @@
 #define MEM_LIBC_MALLOC             1
 #define MEM_ALIGNMENT               4
 #define MEM_SIZE                    4000
-#define MEMP_NUM_TCP_SEG            32
+#define MEMP_NUM_TCP_SEG            80     // >= TCP_SND_QUEUELEN
 #define MEMP_NUM_ARP_QUEUE          10
 #define PBUF_POOL_SIZE              24
 #define LWIP_ARP                    1
@@ -17,7 +17,7 @@
 #define LWIP_RAW                    1
 #define TCP_MSS                     1460
 #define TCP_WND                     (8 * TCP_MSS)
-#define TCP_SND_BUF                 (8 * TCP_MSS)
+#define TCP_SND_BUF                 (16 * TCP_MSS)   // /accessories responses are ~5-12 KB
 #define TCP_SND_QUEUELEN            ((4 * (TCP_SND_BUF) + (TCP_MSS - 1)) / (TCP_MSS))
 #define LWIP_NETIF_STATUS_CALLBACK  1
 #define LWIP_NETIF_LINK_CALLBACK    1
@@ -32,6 +32,16 @@
 #define LWIP_NETIF_TX_SINGLE_PBUF   1
 #define DHCP_DOES_ARP_CHECK         0
 #define LWIP_DHCP_DOES_ACD_CHECK    0
+
+// HomeKit: TCP server (one connection per controller) and mDNS (_hap._tcp)
+#define MEMP_NUM_TCP_PCB            12
+#define MEMP_NUM_UDP_PCB            6
+#define LWIP_IGMP                   1
+#define LWIP_MDNS_RESPONDER         1
+#define MDNS_MAX_SERVICES           1
+#define LWIP_NUM_NETIF_CLIENT_DATA  1
+#define LWIP_NETIF_EXT_STATUS_CALLBACK 1
+#define MEMP_NUM_SYS_TIMEOUT        (LWIP_NUM_SYS_TIMEOUT_INTERNAL + 8)
 
 #define MEM_STATS                   0
 #define SYS_STATS                   0

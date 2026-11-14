@@ -9,4 +9,8 @@
 #define MBEDTLS_AES_ROM_TABLES        // keep tables in flash, save RAM
 #define MBEDTLS_AES_FEWER_TABLES
 
+// HomeKit Pair Setup: SRP-6a bignum arithmetic (3072-bit modular exponentiation)
+#define MBEDTLS_BIGNUM_C
+#define MBEDTLS_HAVE_ASM               // Thumb-1 / x86 multiply-accumulate helpers
+
 #endif

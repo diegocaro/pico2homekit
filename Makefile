@@ -6,7 +6,7 @@ CMAKE := $(PICO_ROOT)/cmake/cmake-3.31.6-macos-universal/CMake.app/Contents/bin/
 NINJA := $(PICO_ROOT)/ninja/ninja
 
 .DEFAULT_GOAL := all
-.PHONY: all flash monitor clean test mac-ble
+.PHONY: all flash monitor clean test hap-test mac-ble
 
 # Host-side unit tests (Apple clang), using the SDK's mbedTLS sources.
 MBEDTLS := $(PICO_SDK_PATH)/lib/mbedtls
@@ -19,6 +19,26 @@ test:
 	  $(MBEDTLS)/library/cipher_wrap.c $(MBEDTLS)/library/platform_util.c $(MBEDTLS)/library/constant_time.c \
 	  -o build-host/test_mibeacon
 	./build-host/test_mibeacon
+
+# HAP server core running on this computer (127.0.0.1) with fake sensors, plus an
+# independent Python HomeKit controller that pairs with it and checks every endpoint.
+MONO := third_party/monocypher
+HAP_SRC := src/hap/hap.c src/hap/srp.c src/hap/srp_selftest.c src/hap/tlv8.c src/bridge.c src/sensors.c src/mibeacon.c \
+  $(MONO)/monocypher.c $(MONO)/monocypher-ed25519.c \
+  $(MBEDTLS)/library/bignum.c $(MBEDTLS)/library/bignum_core.c $(MBEDTLS)/library/constant_time.c \
+  $(MBEDTLS)/library/platform_util.c $(MBEDTLS)/library/aes.c $(MBEDTLS)/library/aesni.c \
+  $(MBEDTLS)/library/aesce.c $(MBEDTLS)/library/ccm.c $(MBEDTLS)/library/cipher.c $(MBEDTLS)/library/cipher_wrap.c
+build-host/hap_host: $(HAP_SRC) tests/hap_host.c src/hap/*.h src/*.h tests/host_config/config.h
+	@mkdir -p build-host
+	cc -O2 -Wall -Wextra -Wno-unused-parameter -Isrc -Itests/host_config -I$(MONO) -I$(MBEDTLS)/include \
+	  -I$(PICO_SDK_PATH)/src/rp2_common/pico_mbedtls/include -DMBEDTLS_CONFIG_FILE='"pico_mbedtls_config.h"' \
+	  tests/hap_host.c $(HAP_SRC) -o $@
+
+build-host/venv:
+	python3 -m venv build-host/venv && build-host/venv/bin/pip -q install cryptography
+
+hap-test: build-host/hap_host build-host/venv
+	build-host/venv/bin/python tools/hap_client.py --spawn build-host/hap_host
 
 # Read the thermometers with the Mac's own Bluetooth (no Pico). `make mac-ble` builds and runs it.
 # macOS kills Bluetooth programs without a usage description, so a minimal Info.plist is embedded.

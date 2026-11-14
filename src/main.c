@@ -1,5 +1,4 @@
-// pico2homekit: Xiaomi LYWSD03MMC thermometers (BLE) -> Wi-Fi.
-// Step 1: scan, decrypt and print readings; connect to Wi-Fi.
+// pico2homekit: Xiaomi LYWSD03MMC thermometers (BLE) -> Apple HomeKit (Wi-Fi).
 #include <stdio.h>
 #include <string.h>
 
@@ -7,9 +6,20 @@
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 
+#include "bridge.h"
 #include "config.h"
+#include "hap/hap.h"
+#include "hap/srp.h"
+#include "hap_port_pico.h"
 #include "mibeacon.h"
 #include "sensors.h"
+
+#ifndef HAP_SETUP_CODE
+#error "Add HAP_SETUP_CODE (\"XXX-XX-XXX\") to config/config.h, see config/config.example.h"
+#endif
+#ifndef HAP_BRIDGE_NAME
+#define HAP_BRIDGE_NAME "Pico Bridge"
+#endif
 
 static btstack_packet_callback_registration_t hci_cb;
 
@@ -53,6 +63,7 @@ static void handle_mibeacon(const uint8_t mac[6], const uint8_t *sd, size_t len)
         if (s->has_humidity) printf("  %5.1f %%RH", s->humidity_pct);
         if (s->has_battery) printf("  batt %3u%%", s->battery_pct);
         printf("\n");
+        bridge_sensor_updated((int)(s - sensors_get(0)));
     }
     static bool led;
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led = !led);
@@ -119,6 +130,9 @@ static void wifi_task(void) {
         if (st == CYW43_LINK_UP) {
             trying = false;
             printf("wifi: connected, IP %s\n", ip4addr_ntoa(netif_ip4_addr(&cyw43_state.netif[CYW43_ITF_STA])));
+            // Power saving adds hundreds of ms of latency and drops mDNS multicast.
+            cyw43_wifi_pm(&cyw43_state, cyw43_pm_value(CYW43_NO_POWERSAVE_MODE, 20, 1, 1, 1));
+            hap_server_start(HAP_BRIDGE_NAME);
         } else {
             printf("wifi: %s (link %d, driver %d)\n", link_str(st), st, wl);
             if (st == CYW43_LINK_FAIL || st == CYW43_LINK_NONET || st == CYW43_LINK_BADAUTH) {
@@ -153,9 +167,64 @@ static void wifi_task(void) {
     }
 }
 
+static void print_status(void) {
+    printf("homekit: '%s', setup code %s, device id %s, %s (%d pairing%s, %d open session%s), config #%u\n",
+           HAP_BRIDGE_NAME, HAP_SETUP_CODE, hap_device_id(), hap_is_paired() ? "paired" : "NOT paired",
+           hap_pairing_count(), hap_pairing_count() == 1 ? "" : "s",
+           hap_secure_connection_count(), hap_secure_connection_count() == 1 ? "" : "s",
+           (unsigned)hap_config_number());
+}
+
+// Commands typed into the serial monitor.
+static void serial_task(void) {
+    static char line[32];
+    static size_t n;
+    int ch;
+    while ((ch = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
+        if (ch != '\r' && ch != '\n') {
+            if (n < sizeof(line) - 1) line[n++] = (char)ch;
+            continue;
+        }
+        line[n] = '\0';
+        n = 0;
+        if (strcmp(line, "status") == 0) {
+            print_status();
+        } else if (strcmp(line, "unpair") == 0) {
+            hap_remove_all_pairings();
+            printf("homekit: all pairings removed; add the bridge again in the Home app\n");
+        } else if (strcmp(line, "debug") == 0) {
+            hap_set_debug(!hap_debug_enabled());
+            printf("homekit: debug logging %s\n", hap_debug_enabled() ? "ON" : "off");
+        } else if (strcmp(line, "selftest") == 0) {
+            srp_selftest();
+        } else if (strcmp(line, "reset") == 0) {
+            hap_factory_reset();
+            printf("homekit: factory reset done (new device id %s)\n", hap_device_id());
+        } else if (line[0]) {
+            printf("commands: status | debug (toggle protocol log) | selftest (SRP check, ~12 s) |\n"
+                   "          unpair (forget all controllers) | reset (new HomeKit identity)\n");
+        }
+    }
+}
+
+// Blink the LED for 3 s when HomeKit asks the accessory to identify itself.
+static void identify_task(void) {
+    static uint32_t until, next_toggle;
+    static bool on;
+    if (bridge_take_identify_request()) until = now_ms() + 3000;
+    if (until && (int32_t)(now_ms() - next_toggle) >= 0) {
+        if ((int32_t)(now_ms() - until) >= 0) { until = 0; on = false; }
+        else on = !on;
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on);
+        next_toggle = now_ms() + 150;
+    }
+}
+
 int main(void) {
     stdio_init_all();
-    sleep_ms(2000); // give the USB serial console time to attach
+    // Give a serial monitor up to 3 s to attach so the boot log is not lost.
+    for (int i = 0; i < 300 && !stdio_usb_connected(); i++) sleep_ms(10);
+    sleep_ms(200);
     printf("\npico2homekit starting\n");
 
     if (!sensors_init()) {
@@ -167,6 +236,15 @@ int main(void) {
         print_mac(sensors_get(i)->mac);
         printf("\n");
     }
+    if (sensors_count() > BRIDGE_MAX_SENSORS)
+        printf("homekit: only the first %d sensors are exposed\n", BRIDGE_MAX_SENSORS);
+
+    bridge_init(HAP_BRIDGE_NAME);
+    if (!hap_init(HAP_SETUP_CODE)) {
+        printf("fix HAP_SETUP_CODE in config/config.h and reflash\n");
+        while (true) sleep_ms(1000);
+    }
+    print_status();
 
     if (cyw43_arch_init()) {
         printf("cyw43 init failed\n");
@@ -183,6 +261,9 @@ int main(void) {
     while (true) {
         cyw43_arch_poll();
         wifi_task();
+        hap_server_poll();
+        serial_task();
+        identify_task();
         if (!ble_on && (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP ||
                         now_ms() > 90000)) {
             hci_power_control(HCI_POWER_ON);
