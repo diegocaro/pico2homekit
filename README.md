@@ -76,6 +76,7 @@ thermometer, its name, MAC and bind key.
 /usr/bin/make hap-test   # HomeKit server on this Mac vs. an independent Python controller
 /usr/bin/make flash      # reboots a running Pico into BOOTSEL itself; first time, hold BOOTSEL while plugging in
 /usr/bin/make monitor    # serial log; quit with Ctrl-A then K
+/usr/bin/make log        # read-only serial log that survives reboots; stop with Ctrl-C
 ```
 
 ## Add it to Apple Home

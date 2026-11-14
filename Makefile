@@ -6,7 +6,7 @@ CMAKE := $(PICO_ROOT)/cmake/cmake-3.31.6-macos-universal/CMake.app/Contents/bin/
 NINJA := $(PICO_ROOT)/ninja/ninja
 
 .DEFAULT_GOAL := all
-.PHONY: all flash monitor clean test hap-test mac-ble fuzz
+.PHONY: all flash monitor log clean test hap-test mac-ble fuzz
 
 # Host-side unit tests (Apple clang), using the SDK's mbedTLS sources.
 MBEDTLS := $(PICO_SDK_PATH)/lib/mbedtls
@@ -105,6 +105,21 @@ monitor:
 	@port=$$(ls /dev/tty.usbmodem* 2>/dev/null | head -1); \
 	  if [ -z "$$port" ]; then echo "No Pico serial port found (still in BOOTSEL, or not plugged in?)"; exit 1; fi; \
 	  screen $$port 115200
+
+# Read-only serial log: no keyboard input, keeps going when the Pico reboots or is
+# replugged. Stop with Ctrl-C.
+log:
+	@echo "waiting for the Pico (Ctrl-C to stop)"; \
+	  while true; do \
+	    port=$$(ls /dev/cu.usbmodem* 2>/dev/null | head -1); \
+	    if [ -n "$$port" ]; then \
+	      echo "--- connected $$port $$(date +%T)"; \
+	      stty -f $$port raw -echo 2>/dev/null; \
+	      cat $$port 2>/dev/null; \
+	      echo "--- disconnected $$(date +%T)"; \
+	    fi; \
+	    sleep 0.5; \
+	  done
 
 clean:
 	$(CMAKE) -E rm -rf build
