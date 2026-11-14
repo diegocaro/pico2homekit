@@ -8,6 +8,7 @@
 
 #include "bridge.h"
 #include "config.h"
+#include "git_version.h"  // generated at build time: GIT_VERSION
 #include "hap/hap.h"
 #include "hap/srp.h"
 #include "hap_port_pico.h"
@@ -179,6 +180,7 @@ static void wifi_task(void) {
 }
 
 static void print_status(void) {
+    printf("firmware: version %s\n", GIT_VERSION);
     printf("homekit: '%s', setup code %s, device id %s, %s (%d pairing%s, %d open session%s), config #%u\n",
            HAP_BRIDGE_NAME, HAP_SETUP_CODE, hap_device_id(), hap_is_paired() ? "paired" : "NOT paired",
            hap_pairing_count(), hap_pairing_count() == 1 ? "" : "s",
@@ -236,7 +238,7 @@ int main(void) {
     // Give a serial monitor up to 3 s to attach so the boot log is not lost.
     for (int i = 0; i < 300 && !stdio_usb_connected(); i++) sleep_ms(10);
     sleep_ms(200);
-    printf("\npico2homekit starting\n");
+    printf("\npico2homekit starting, version %s\n", GIT_VERSION);
 
     if (!sensors_init()) {
         printf("fix config/config.h and reflash\n");

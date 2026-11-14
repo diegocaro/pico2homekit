@@ -93,7 +93,7 @@ Commands you can type in `make monitor`:
 
 | Command | Effect |
 |---|---|
-| `status` | setup code, device id, pairings, open sessions |
+| `status` | firmware version (git commit, `-dirty` if built with uncommitted changes), setup code, device id, pairings, open sessions |
 | `debug` | toggle the protocol log: every request, pairing TLV items, responses, events |
 | `selftest` | re-run the SRP known-answer test (about 12 s; pauses HomeKit meanwhile) |
 | `unpair` | forget all controllers (then add the bridge again in Home) |

@@ -42,6 +42,17 @@ target_link_libraries(pico2homekit
     pico_rand
 )
 
+# git_version.h: the commit this firmware was built from (printed at boot and by `status`).
+find_package(Git QUIET)
+add_custom_target(git_version
+    COMMAND ${CMAKE_COMMAND} -DGIT=${GIT_EXECUTABLE} -DSRC=${CMAKE_CURRENT_LIST_DIR}
+            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/generated/git_version.h
+            -P ${CMAKE_CURRENT_LIST_DIR}/cmake/git_version.cmake
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/generated/git_version.h
+)
+add_dependencies(pico2homekit git_version)
+target_include_directories(pico2homekit PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
 pico_enable_stdio_usb(pico2homekit 1)
 pico_enable_stdio_uart(pico2homekit 0)
 pico_add_extra_outputs(pico2homekit)
