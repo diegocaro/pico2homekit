@@ -17,6 +17,9 @@ static void test_lywsd03mmc_encrypted(void) {
                              0x30, 0x53, 0x24, 0x32, 0xa5, 0x16, 0xf3, 0xa8};
     mibeacon_reading_t r;
 
+    uint8_t frame_mac[6];
+    CHECK(mibeacon_frame_mac(sd, sizeof(sd) - 1, frame_mac) && memcmp(frame_mac, mac, 6) == 0);
+
     CHECK(mibeacon_parse(sd, sizeof(sd) - 1, mac, key, &r) == MIBEACON_OK);
     // Decrypts to object 0x1006, raw 467 -> 46.7 % (xiaomi-ble truncates this to 46).
     CHECK(r.has_humidity && fabsf(r.humidity_pct - 46.7f) < 0.01f);

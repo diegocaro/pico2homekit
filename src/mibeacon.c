@@ -16,6 +16,12 @@ int mibeacon_frame_counter(const uint8_t *sd, size_t len) {
     return len < 5 ? -1 : sd[4];
 }
 
+bool mibeacon_frame_mac(const uint8_t *sd, size_t len, uint8_t mac[6]) {
+    if (len < 11 || !(rd16(sd) & FC_MAC)) return false;
+    for (int k = 0; k < 6; k++) mac[k] = sd[10 - k]; // stored LSB first at offset 5
+    return true;
+}
+
 static void parse_objects(const uint8_t *p, size_t len, mibeacon_reading_t *out) {
     size_t i = 0;
     while (i + 3 <= len) {

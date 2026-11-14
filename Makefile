@@ -6,7 +6,7 @@ CMAKE := $(PICO_ROOT)/cmake/cmake-3.31.6-macos-universal/CMake.app/Contents/bin/
 NINJA := $(PICO_ROOT)/ninja/ninja
 
 .DEFAULT_GOAL := all
-.PHONY: all flash monitor clean test
+.PHONY: all flash monitor clean test mac-ble
 
 # Host-side unit tests (Apple clang), using the SDK's mbedTLS sources.
 MBEDTLS := $(PICO_SDK_PATH)/lib/mbedtls
@@ -19,6 +19,23 @@ test:
 	  $(MBEDTLS)/library/cipher_wrap.c $(MBEDTLS)/library/platform_util.c $(MBEDTLS)/library/constant_time.c \
 	  -o build-host/test_mibeacon
 	./build-host/test_mibeacon
+
+# Read the thermometers with the Mac's own Bluetooth (no Pico). `make mac-ble` builds and runs it.
+# macOS kills Bluetooth programs without a usage description, so a minimal Info.plist is embedded.
+MAC_BLE_SRC := tools/mac_ble.m src/mibeacon.c src/sensors.c \
+  $(MBEDTLS)/library/aes.c $(MBEDTLS)/library/aesni.c $(MBEDTLS)/library/aesce.c $(MBEDTLS)/library/ccm.c \
+  $(MBEDTLS)/library/cipher.c $(MBEDTLS)/library/cipher_wrap.c $(MBEDTLS)/library/platform_util.c \
+  $(MBEDTLS)/library/constant_time.c
+build-host/mac_ble: $(MAC_BLE_SRC) src/mibeacon.h src/sensors.h config/config.h
+	@mkdir -p build-host
+	@printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>local.pico2homekit.mac-ble</string><key>NSBluetoothAlwaysUsageDescription</key><string>Read Xiaomi thermometers</string></dict></plist>' > build-host/Info.plist
+	cc -fobjc-arc -O1 -Isrc -Iconfig -sectcreate __TEXT __info_plist build-host/Info.plist \
+	  -I$(MBEDTLS)/include -I$(PICO_SDK_PATH)/src/rp2_common/pico_mbedtls/include \
+	  -DMBEDTLS_CONFIG_FILE='"pico_mbedtls_config.h"' \
+	  $(MAC_BLE_SRC) -framework Foundation -framework CoreBluetooth -o $@
+
+mac-ble: build-host/mac_ble
+	./build-host/mac_ble
 
 all: build/build.ninja
 	$(CMAKE) --build build
