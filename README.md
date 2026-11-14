@@ -19,6 +19,9 @@ How it fits together:
 | Pico networking, mDNS, flash storage | `src/hap_port_pico.c` |
 | Crypto: Monocypher (Ed25519, X25519, ChaCha20-Poly1305, SHA-512); mbedTLS (bignum for SRP, AES-CCM) | `third_party/monocypher/`, Pico SDK |
 
+Third-party libraries, their versions and licences (including the Raspberry Pi-only terms of
+the Wi-Fi/Bluetooth driver and BTstack): [THIRD_PARTY.md](THIRD_PARTY.md).
+
 ## Toolchain (macOS, no Homebrew, no sudo)
 
 Step-by-step install instructions: [SETUP.md](SETUP.md). Everything lives in `~/.pico-sdk`:
