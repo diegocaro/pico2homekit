@@ -18,6 +18,14 @@ typedef struct hap_conn hap_conn_t;
 bool hap_init(const char *setup_code);
 
 hap_conn_t *hap_conn_new(void *handle);   // NULL when all slots are in use
+
+// Call every second or so: closes connections that have not completed Pair Verify
+// within this time (they would otherwise let anyone on the LAN hold every slot).
+#define HAP_UNVERIFIED_TIMEOUT_MS 60000u
+void hap_expire_unverified(void);
+// When all slots are taken: the port handle of the oldest connection that has
+// not completed Pair Verify (and is not mid Pair Setup), to close for a newcomer.
+void *hap_oldest_unverified(void);
 void hap_conn_recv(hap_conn_t *c, const uint8_t *data, size_t len);
 void hap_conn_free(hap_conn_t *c);
 

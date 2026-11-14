@@ -4,3 +4,6 @@ config/config.h
 build-host/
 tmp/
 token_extractor.zip
+dist/
+build-release/
+config/config.txt

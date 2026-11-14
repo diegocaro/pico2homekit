@@ -6,6 +6,9 @@
 #include "hap/hap.h"
 #include "hap/hap_port.h"
 #include "hardware/flash.h"
+#include "hardware/structs/rosc.h"
+#include "monocypher-ed25519.h"
+#include "monocypher.h"
 #include "lwip/apps/mdns.h"
 #include "lwip/tcp.h"
 #include "pico/cyw43_arch.h"
@@ -16,14 +19,42 @@
 // ---------------------------------------------------------------------------
 // Basics
 
-void hap_port_random(uint8_t *buf, size_t len) {
-    while (len > 0) {
-        uint64_t r = get_rand_64();
-        size_t n = len < 8 ? len : 8;
-        memcpy(buf, &r, n);
-        buf += n;
-        len -= n;
+// Random bytes for keys (Ed25519 identity, SRP, X25519, salts). get_rand_64()
+// alone is a fast PRNG, not a cryptographic one, so every call gathers fresh
+// entropy (512 ring-oscillator bits, the SDK generator, the µs timer) into a
+// SHA-512 pool and expands it with ChaCha20. The pool is replaced each call
+// (forward secrecy: a later RAM dump does not reveal earlier outputs).
+static uint8_t rng_pool[64];
+static uint64_t rng_calls;
+
+static void rng_mix(crypto_sha512_ctx *ctx) {
+    uint8_t bits[64] = {0};
+    for (int i = 0; i < 512; i++) {
+        for (volatile int d = 0; d < 20; d++) {}   // let the oscillator drift between samples
+        bits[i / 8] |= (uint8_t)((rosc_hw->randombit & 1u) << (i % 8));
     }
+    uint64_t extra[3] = {get_rand_64(), get_rand_64(), time_us_64()};
+    crypto_sha512_update(ctx, bits, sizeof(bits));
+    crypto_sha512_update(ctx, (const uint8_t *)extra, sizeof(extra));
+    crypto_wipe(bits, sizeof(bits));
+    crypto_wipe(extra, sizeof(extra));
+}
+
+void hap_port_random(uint8_t *buf, size_t len) {
+    crypto_sha512_ctx ctx;
+    crypto_sha512_init(&ctx);
+    crypto_sha512_update(&ctx, rng_pool, sizeof(rng_pool));
+    crypto_sha512_update(&ctx, (const uint8_t *)&rng_calls, sizeof(rng_calls));
+    rng_mix(&ctx);
+    crypto_sha512_final(&ctx, rng_pool);
+    // first half keys this output, second half carries over to the next call
+    uint8_t nonce[8];
+    memcpy(nonce, &rng_calls, sizeof(nonce));
+    rng_calls++;
+    memset(buf, 0, len);
+    crypto_chacha20_djb(buf, buf, len, rng_pool, nonce, 0);
+    crypto_sha512(rng_pool, rng_pool, sizeof(rng_pool));  // erase the key just used
+    crypto_wipe(&ctx, sizeof(ctx));
 }
 
 uint32_t hap_port_millis(void) { return to_ms_since_boot(get_absolute_time()); }
@@ -158,6 +189,15 @@ static err_t on_accept(void *arg, struct tcp_pcb *pcb, err_t err) {
     if (err != ERR_OK || !pcb) return ERR_VAL;
     pconn_t *pc = NULL;
     for (int i = 0; i < HAP_MAX_CONNECTIONS; i++) if (!pconns[i].used) { pc = &pconns[i]; break; }
+    if (!pc) {
+        // All slots taken: make room by closing the oldest connection that never
+        // completed Pair Verify, so idle LAN clients cannot lock controllers out.
+        pc = hap_oldest_unverified();
+        if (pc) {
+            printf("hap: all slots in use, closing the oldest unverified connection\n");
+            pconn_close_now(pc);
+        }
+    }
     hap_conn_t *h = pc ? hap_conn_new(pc) : NULL;
     if (!h) {
         printf("hap: connection refused, all %d slots in use\n", HAP_MAX_CONNECTIONS);
@@ -194,6 +234,11 @@ bool hap_port_send(void *handle, const uint8_t *data, size_t len) {
 void hap_port_close(void *handle) { ((pconn_t *)handle)->closing = true; }
 
 void hap_server_poll(void) {
+    static uint32_t next_expire;
+    if ((int32_t)(hap_port_millis() - next_expire) >= 0) {
+        hap_expire_unverified();
+        next_expire = hap_port_millis() + 1000;
+    }
     for (int i = 0; i < HAP_MAX_CONNECTIONS; i++)
         if (pconns[i].used && pconns[i].closing) pconn_close_now(&pconns[i]);
 }

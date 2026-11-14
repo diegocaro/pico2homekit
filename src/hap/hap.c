@@ -75,6 +75,7 @@ struct hap_conn {
     bool used;
     bool closing;
     void *handle;
+    uint32_t opened_ms;
     // encrypted session (after Pair Verify)
     bool secure;
     int pairing;              // index into store.pairings
@@ -101,7 +102,18 @@ static struct {
     uint8_t K[64];
     uint32_t started_ms;
 } ps;
-static unsigned failed_setup_attempts;
+// Pair Setup costs ~2 s (M1) + ~6 s (M3) of CPU on the RP2040, and anyone on the
+// LAN may start it while the bridge is unpaired. Every new attempt therefore
+// doubles the wait before the next one may start (1 s, 2 s, 4 s ... 60 s); a
+// successful pairing resets it. Too-early attempts get a cheap Backoff error.
+static unsigned failed_setup_attempts;   // attempts since the last success
+static uint32_t setup_next_allowed_ms;
+#define TLV_RETRY_DELAY 0x08
+
+static uint32_t setup_backoff_ms(unsigned attempts) {
+    if (attempts == 0) return 0;
+    return attempts > 6 ? 60000u : 1000u << (attempts - 1);
+}
 
 static char setup_code[11];
 
@@ -284,8 +296,27 @@ static void pair_setup(hap_conn_t *c, const uint8_t *in, size_t in_len) {
 
     if (state == 1) {
         if (hap_is_paired()) { LOG("pair-setup refused: already paired\n"); send_tlv_error(c, 2, TLV_ERR_UNAVAILABLE); return; }
-        if (failed_setup_attempts >= 100) { send_tlv_error(c, 2, TLV_ERR_MAX_TRIES); return; }
+        if (ps.owner == c && ps.state == 2) {
+            // Repeated M1 on the same connection: answer with the same M2, no new work.
+            tlv_add_u8(&w, TLV_STATE, 2);
+            tlv_add(&w, TLV_PUBLIC_KEY, ps.B, SRP_LEN);
+            tlv_add(&w, TLV_SALT, store.srp_salt, SRP_SALT_LEN);
+            send_tlv(c, &w);
+            return;
+        }
         if (ps.owner && ps.owner != c) { send_tlv_error(c, 2, TLV_ERR_BUSY); return; }
+        int32_t wait = (int32_t)(setup_next_allowed_ms - hap_port_millis());
+        if (failed_setup_attempts && wait > 0) {
+            uint8_t secs = (uint8_t)((wait + 999) / 1000);
+            LOG("pair-setup refused: retry in %u s\n", secs);
+            tlv_add_u8(&w, TLV_STATE, 2);
+            tlv_add_u8(&w, TLV_ERROR, TLV_ERR_BACKOFF);
+            tlv_add_u8(&w, TLV_RETRY_DELAY, secs);
+            send_tlv(c, &w);
+            return;
+        }
+        failed_setup_attempts++;   // counts until M5 succeeds
+        setup_next_allowed_ms = hap_port_millis() + setup_backoff_ms(failed_setup_attempts);
         ps_reset();
         ps.owner = c;
         ps.started_ms = hap_port_millis();
@@ -314,7 +345,7 @@ static void pair_setup(hap_conn_t *c, const uint8_t *in, size_t in_len) {
         LOG("pair-setup M3: verifying proof...\n");
         uint32_t t0 = hap_port_millis();
         if (srp_server_verify(store.srp_verifier, ps.b, ps.B, A, (size_t)A_len, store.srp_salt, M1, ps.K, M2) != 0) {
-            failed_setup_attempts++;
+            // (already counted at M1; the backoff before the next attempt applies)
             LOG("pair-setup failed: wrong setup code\n");
             ps_reset();
             send_tlv_error(c, 4, TLV_ERR_AUTHENTICATION);
@@ -336,7 +367,7 @@ static void pair_setup(hap_conn_t *c, const uint8_t *in, size_t in_len) {
         nonce_label(nonce, "PS-Msg05");
         if (enc_len < 16 || aead_open(key, nonce, NULL, 0, enc, (size_t)enc_len, plain) != 0) {
             LOG("pair-setup M5: decryption failed\n");
-            ps_reset(); send_tlv_error(c, 6, TLV_ERR_AUTHENTICATION); return;
+            crypto_wipe(key, sizeof(key)); ps_reset(); send_tlv_error(c, 6, TLV_ERR_AUTHENTICATION); return;
         }
         size_t plain_len = (size_t)enc_len - 16;
 
@@ -344,21 +375,24 @@ static void pair_setup(hap_conn_t *c, const uint8_t *in, size_t in_len) {
         int id_len = tlv_get(plain, plain_len, TLV_IDENTIFIER, id, sizeof(id));
         if (id_len <= 0 || tlv_get(plain, plain_len, TLV_PUBLIC_KEY, ltpk, 32) != 32 ||
             tlv_get(plain, plain_len, TLV_SIGNATURE, sig, 64) != 64) {
-            ps_reset(); send_tlv_error(c, 6, TLV_ERR_UNKNOWN); return;
+            crypto_wipe(key, sizeof(key)); ps_reset(); send_tlv_error(c, 6, TLV_ERR_UNKNOWN); return;
         }
         // Verify the controller's signature over iOSDeviceX | id | LTPK.
         static uint8_t info[32 + 36 + 32];
         hkdf32(info, ps.K, 64, "Pair-Setup-Controller-Sign-Salt", "Pair-Setup-Controller-Sign-Info");
         memcpy(info + 32, id, (size_t)id_len);
         memcpy(info + 32 + id_len, ltpk, 32);
-        if (crypto_ed25519_check(sig, ltpk, info, 32 + (size_t)id_len + 32) != 0) {
+        int bad_sig = crypto_ed25519_check(sig, ltpk, info, 32 + (size_t)id_len + 32);
+        crypto_wipe(info, sizeof(info));   // derived from the SRP session key
+        if (bad_sig) {
             LOG("pair-setup M5: bad controller signature\n");
-            ps_reset(); send_tlv_error(c, 6, TLV_ERR_AUTHENTICATION); return;
+            crypto_wipe(key, sizeof(key));
+            crypto_wipe(key, sizeof(key)); ps_reset(); send_tlv_error(c, 6, TLV_ERR_AUTHENTICATION); return;
         }
 
         int slot = pairing_find(id, (size_t)id_len);
         if (slot < 0) slot = pairing_add(id, (size_t)id_len, ltpk, 1);
-        if (slot < 0) { ps_reset(); send_tlv_error(c, 6, TLV_ERR_MAX_PEERS); return; }
+        if (slot < 0) { crypto_wipe(key, sizeof(key)); ps_reset(); send_tlv_error(c, 6, TLV_ERR_MAX_PEERS); return; }
         store.pairings[slot].perms = 1;
         memcpy(store.pairings[slot].ltpk, ltpk, 32);
 
@@ -370,6 +404,7 @@ static void pair_setup(hap_conn_t *c, const uint8_t *in, size_t in_len) {
         memcpy(ainfo + 32 + dlen, store.ltpk, 32);
         uint8_t asig[64];
         crypto_ed25519_sign(asig, store.ltsk, ainfo, 32 + dlen + 32);
+        crypto_wipe(ainfo, sizeof(ainfo));
 
         uint8_t sub[160];
         tlv_writer_t sw;
@@ -386,6 +421,7 @@ static void pair_setup(hap_conn_t *c, const uint8_t *in, size_t in_len) {
         crypto_wipe(key, sizeof(key));
         ps_reset();
         failed_setup_attempts = 0;
+        setup_next_allowed_ms = 0;
         store_save();
         LOG("paired with controller %.*s\n", id_len, id);
         hap_port_status_changed();
@@ -398,6 +434,13 @@ static void pair_setup(hap_conn_t *c, const uint8_t *in, size_t in_len) {
 
 // ---------------------------------------------------------------------------
 // Pair Verify (POST /pair-verify)
+
+// Failed Pair Verify: forget this attempt's key-exchange secrets right away.
+static void pv_fail(hap_conn_t *c) {
+    crypto_wipe(c->pv_secret, 32);
+    crypto_wipe(c->pv_shared, 32);
+    send_tlv_error(c, 4, TLV_ERR_AUTHENTICATION);
+}
 
 static void pair_verify(hap_conn_t *c, const uint8_t *in, size_t in_len) {
     int state = tlv_get_u8(in, in_len, TLV_STATE);
@@ -427,6 +470,7 @@ static void pair_verify(hap_conn_t *c, const uint8_t *in, size_t in_len) {
         hkdf32(key, c->pv_shared, 32, "Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info");
         nonce_label(nonce, "PV-Msg02");
         aead_seal(key, nonce, NULL, 0, sub, sw.len, enc);
+        crypto_wipe(key, sizeof(key));
 
         tlv_add_u8(&w, TLV_STATE, 2);
         tlv_add(&w, TLV_PUBLIC_KEY, c->pv_public, 32);
@@ -441,19 +485,19 @@ static void pair_verify(hap_conn_t *c, const uint8_t *in, size_t in_len) {
         int enc_len = tlv_get(in, in_len, TLV_ENCRYPTED_DATA, enc, sizeof(enc));
         hkdf32(key, c->pv_shared, 32, "Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info");
         nonce_label(nonce, "PV-Msg03");
-        if (enc_len < 16 || aead_open(key, nonce, NULL, 0, enc, (size_t)enc_len, sub) != 0) {
-            send_tlv_error(c, 4, TLV_ERR_AUTHENTICATION); return;
-        }
+        int open_rc = enc_len < 16 ? -1 : aead_open(key, nonce, NULL, 0, enc, (size_t)enc_len, sub);
+        crypto_wipe(key, sizeof(key));
+        if (open_rc != 0) { pv_fail(c); return; }
         size_t sub_len = (size_t)enc_len - 16;
         uint8_t id[36], sig[64];
         int id_len = tlv_get(sub, sub_len, TLV_IDENTIFIER, id, sizeof(id));
         if (id_len <= 0 || tlv_get(sub, sub_len, TLV_SIGNATURE, sig, 64) != 64) {
-            send_tlv_error(c, 4, TLV_ERR_AUTHENTICATION); return;
+            pv_fail(c); return;
         }
         int slot = pairing_find(id, (size_t)id_len);
         if (slot < 0) {
             LOG("pair-verify: unknown controller %.*s\n", id_len, id);
-            send_tlv_error(c, 4, TLV_ERR_AUTHENTICATION); return;
+            pv_fail(c); return;
         }
         uint8_t info[32 + 36 + 32];
         memcpy(info, c->pv_peer, 32);
@@ -461,7 +505,7 @@ static void pair_verify(hap_conn_t *c, const uint8_t *in, size_t in_len) {
         memcpy(info + 32 + id_len, c->pv_public, 32);
         if (crypto_ed25519_check(sig, store.pairings[slot].ltpk, info, 32 + (size_t)id_len + 32) != 0) {
             LOG("pair-verify: bad signature\n");
-            send_tlv_error(c, 4, TLV_ERR_AUTHENTICATION); return;
+            pv_fail(c); return;
         }
 
         tlv_add_u8(&w, TLV_STATE, 4);
@@ -772,25 +816,40 @@ static void process_requests(hap_conn_t *c) {
         memcpy(path, sp1 + 1, (size_t)(sp2 - sp1 - 1));
         path[sp2 - sp1 - 1] = '\0';
 
+        // Content-Length: digits only, parsed with a cap. (strtoul accepted "-5",
+        // which wrapped to a huge size_t, overflowed hlen + clen past the size
+        // check and made the server write and parse outside the request buffer.)
         size_t clen = 0;
-        for (size_t i = 0; i + 15 < hlen; i++) {
+        for (size_t i = 0; i + 16 < hlen; i++) {
             if ((line[i] == '\n') && strncasecmp(line + i + 1, "Content-Length:", 15) == 0) {
-                clen = strtoul(line + i + 16, NULL, 10);
+                const char *v = line + i + 16, *end = line + hlen;
+                while (v < end && (*v == ' ' || *v == '\t')) v++;
+                if (v >= end || *v < '0' || *v > '9') { LOG("bad Content-Length\n"); close_conn(c); return; }
+                while (v < end && *v >= '0' && *v <= '9') {
+                    clen = clen * 10 + (size_t)(*v++ - '0');
+                    if (clen >= REQ_CAP) { LOG("request body too large\n"); close_conn(c); return; }
+                }
+                if (v < end && *v != '\r' && *v != ' ' && *v != '\t') { LOG("bad Content-Length\n"); close_conn(c); return; }
                 break;
             }
         }
-        if (hlen + clen >= REQ_CAP) { LOG("request body too large\n"); close_conn(c); return; }
+        if (clen >= REQ_CAP - hlen) { LOG("request body too large\n"); close_conn(c); return; }  // hlen < REQ_CAP here
         if (c->req_len < hlen + clen) return;  // wait for the rest of the body
 
         uint8_t *data = c->req + hlen;
         uint8_t saved = data[clen];
         data[clen] = '\0';  // lets JSON handlers use string functions
+        bool was_secure = c->secure;
         handle_request(c, method, path, data, clen);
         data[clen] = saved;
 
         size_t used = hlen + clen;
         memmove(c->req, c->req + used, c->req_len - used);
         c->req_len -= used;
+        // Pair Verify just switched this connection to encrypted: whatever follows in
+        // the buffer must be ciphertext. Never parse it here as plaintext, or a man in
+        // the middle could append requests that run with the controller's rights.
+        if (c->secure != was_secure) return;
     }
 }
 
@@ -804,9 +863,9 @@ static bool req_append(hap_conn_t *c, const uint8_t *data, size_t len) {
 void hap_conn_recv(hap_conn_t *c, const uint8_t *data, size_t len) {
     while (len > 0 && !c->closing) {
         if (!c->secure) {
-            // Plaintext until Pair Verify completes. Feed one byte past the
-            // first complete request at most, so bytes that arrive encrypted
-            // after M4 are not parsed as plaintext.
+            // Plaintext until Pair Verify completes. process_requests() stops as
+            // soon as the session turns encrypted; the rest is passed to the
+            // frame decryptor below.
             if (!req_append(c, data, len)) return;
             len = 0;
             process_requests(c);
@@ -857,10 +916,33 @@ hap_conn_t *hap_conn_new(void *handle) {
             c->used = true;
             c->handle = handle;
             c->pairing = -1;
+            c->opened_ms = hap_port_millis();
             return c;
         }
     }
     return NULL;
+}
+
+// Connections that have not completed Pair Verify cannot do anything useful, so
+// they must not be able to hold the few connection slots: they are closed after
+// HAP_UNVERIFIED_TIMEOUT_MS, and the oldest is evicted when a new client arrives
+// while all slots are taken.
+void hap_expire_unverified(void) {
+    for (int i = 0; i < HAP_MAX_CONNECTIONS; i++) {
+        hap_conn_t *c = &conns[i];
+        if (c->used && !c->secure && !c->closing && hap_port_millis() - c->opened_ms > HAP_UNVERIFIED_TIMEOUT_MS)
+            close_conn(c);
+    }
+}
+
+void *hap_oldest_unverified(void) {
+    hap_conn_t *best = NULL;
+    for (int i = 0; i < HAP_MAX_CONNECTIONS; i++) {
+        hap_conn_t *c = &conns[i];
+        if (c->used && !c->secure && ps.owner != c &&
+            (!best || (int32_t)(c->opened_ms - best->opened_ms) < 0)) best = c;
+    }
+    return best ? best->handle : NULL;
 }
 
 void hap_conn_free(hap_conn_t *c) {
@@ -907,6 +989,14 @@ static void new_identity(void) {
     LOG("created new accessory identity %s\n", store.device_id);
 }
 
+// Lengths read back from flash are used for memcpy/strlen: never trust them blindly.
+static bool store_sane(void) {
+    if (memchr(store.device_id, '\0', sizeof(store.device_id)) == NULL || strlen(store.device_id) != 17) return false;
+    for (int i = 0; i < HAP_MAX_PAIRINGS; i++)
+        if (store.pairings[i].used && (store.pairings[i].id_len == 0 || store.pairings[i].id_len > 36)) return false;
+    return true;
+}
+
 static bool prepare_verifier(void) {
     // The prefix versions the SRP implementation: bumping it forces a recompute.
     char tagged[32];
@@ -937,7 +1027,8 @@ bool hap_init(const char *code) {
 
     LOG("loading state (%u bytes)\n", (unsigned)sizeof(store));
     bool dirty = false;
-    if (!hap_port_store_load(&store, sizeof(store)) || store.magic != STORE_MAGIC || store.version != STORE_VERSION) {
+    if (!hap_port_store_load(&store, sizeof(store)) || store.magic != STORE_MAGIC || store.version != STORE_VERSION ||
+        !store_sane()) {
         new_identity();
         dirty = true;
     }

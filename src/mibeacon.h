@@ -15,15 +15,18 @@ typedef struct {
     float temperature_c;
     float humidity_pct;
     uint8_t battery_pct;
+    bool has_counter;        // encrypted frames: authenticated 32-bit packet counter
+    uint32_t counter;
 } mibeacon_reading_t;
 
 typedef enum {
     MIBEACON_OK = 0,
-    MIBEACON_NO_DATA,        // valid frame without sensor objects (e.g. pairing beacon)
+    MIBEACON_NO_DATA,        // valid frame without (plausible) sensor values
     MIBEACON_MALFORMED,
     MIBEACON_UNSUPPORTED,    // encrypted with v2/v3 scheme
     MIBEACON_NO_KEY,         // encrypted but no key supplied
-    MIBEACON_DECRYPT_FAILED, // wrong key or corrupted frame
+    MIBEACON_DECRYPT_FAILED, // wrong key or corrupted/forged frame
+    MIBEACON_NOT_ENCRYPTED,  // plaintext frame although a key was supplied (spoofing)
 } mibeacon_result_t;
 
 // Frame counter without parsing (cheap pre-check for de-duplication).
@@ -36,7 +39,7 @@ bool mibeacon_frame_mac(const uint8_t *sd, size_t len, uint8_t mac[6]);
 
 // sd/len: service data *after* the 2-byte 0xFE95 UUID (starts at frame control).
 // mac: device address, most-significant byte first (as printed: A4:C1:38:...).
-// key: 16-byte bind key, or NULL.
+// key: 16-byte bind key, or NULL. With a key, only encrypted frames are accepted.
 mibeacon_result_t mibeacon_parse(const uint8_t *sd, size_t len, const uint8_t mac[6],
                                  const uint8_t key[16], mibeacon_reading_t *out);
 

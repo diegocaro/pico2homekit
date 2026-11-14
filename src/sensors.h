@@ -13,6 +13,8 @@ typedef struct {
     // latest state
     bool seen;
     int last_frame;   // -1 = none yet
+    bool has_counter; // last authenticated 32-bit packet counter (replay protection)
+    uint32_t last_counter;
     uint32_t last_update_ms;
     float temperature_c;
     float humidity_pct;

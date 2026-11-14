@@ -22,6 +22,30 @@ How it fits together:
 Third-party libraries, their versions and licences (including the Raspberry Pi-only terms of
 the Wi-Fi/Bluetooth driver and BTstack): [THIRD_PARTY.md](THIRD_PARTY.md).
 
+## Security
+
+Threat model: anyone on the Wi-Fi network can connect to the HomeKit port; anyone in
+Bluetooth range can broadcast advertisements. Protections in place:
+
+- HTTP parsing is strict (digits-only `Content-Length`, hard size caps); encrypted sessions
+  never accept trailing plaintext after Pair Verify.
+- Pair Setup is rate limited (1, 2, 4 … 60 s between attempts, reset on success), and an
+  idle or half-open connection cannot hold one of the 8 slots: the oldest connection that
+  never completed Pair Verify is closed for newcomers, and all of them after 60 s.
+- Thermometers with a bind key are only accepted encrypted and authenticated; the
+  authenticated packet counter must increase (replays are dropped); NaN or out-of-range
+  values are ignored.
+- Keys come from a SHA-512 entropy pool (ring-oscillator noise + SDK generator + timer)
+  expanded with ChaCha20; key material is wiped after use.
+
+`make fuzz` builds the HomeKit server and the BLE/TLV parsers with AddressSanitizer and
+UndefinedBehaviorSanitizer, runs the protocol test, 2 million random parser inputs and a
+minute of malformed network traffic.
+
+Known limits: the setup code is printed on the USB serial console (physical access); a
+flash dump of the Pico allows offline guessing of the 8-digit setup code (inherent to SRP);
+the Pair Setup backoff restarts after a reboot.
+
 ## Toolchain (macOS, no Homebrew, no sudo)
 
 Step-by-step install instructions: [SETUP.md](SETUP.md). Everything lives in `~/.pico-sdk`:

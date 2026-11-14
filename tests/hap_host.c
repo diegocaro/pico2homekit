@@ -21,7 +21,7 @@
 #include "sensors.h"
 
 typedef struct { int fd; bool closing; hap_conn_t *hap; } client_t;
-static client_t clients[HAP_MAX_CONNECTIONS + 1];
+static client_t clients[HAP_MAX_CONNECTIONS];   // same limit as the Pico
 static const char *state_path;
 
 void hap_port_random(uint8_t *buf, size_t len) { arc4random_buf(buf, len); }
@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGPIPE, SIG_IGN);
     state_path = argv[2];
-    for (int i = 0; i <= HAP_MAX_CONNECTIONS; i++) clients[i].fd = -1;
+    for (int i = 0; i < HAP_MAX_CONNECTIONS; i++) clients[i].fd = -1;
 
     sensors_init();
     bridge_init(HAP_BRIDGE_NAME);
@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
         int map[HAP_MAX_CONNECTIONS + 2], n = 0;
         pfd[n] = (struct pollfd){.fd = ls, .events = POLLIN};
         map[n++] = -1;
-        for (int i = 0; i <= HAP_MAX_CONNECTIONS; i++)
+        for (int i = 0; i < HAP_MAX_CONNECTIONS; i++)
             if (clients[i].fd >= 0) { pfd[n] = (struct pollfd){.fd = clients[i].fd, .events = POLLIN}; map[n++] = i; }
         poll(pfd, (nfds_t)n, 100);
 
@@ -113,8 +113,13 @@ int main(int argc, char **argv) {
                 if (fd < 0) continue;
                 setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
                 client_t *c = NULL;
-                for (int i = 0; i <= HAP_MAX_CONNECTIONS; i++) if (clients[i].fd < 0) { c = &clients[i]; break; }
-                if (!c) { close(fd); continue; }
+                for (int i = 0; i < HAP_MAX_CONNECTIONS; i++) if (clients[i].fd < 0) { c = &clients[i]; break; }
+                if (!c) {   // same policy as the Pico: evict the oldest unverified connection
+                    c = hap_oldest_unverified();
+                    if (!c) { close(fd); continue; }
+                    printf("host: all slots in use, closing the oldest unverified connection\n");
+                    drop(c);
+                }
                 c->fd = fd;
                 c->hap = hap_conn_new(c);
                 if (!c->hap) { printf("host: no free HAP slot\n"); drop(c); }
@@ -126,7 +131,8 @@ int main(int argc, char **argv) {
             if (r <= 0) { drop(c); continue; }
             hap_conn_recv(c->hap, buf, (size_t)r);
         }
-        for (int i = 0; i <= HAP_MAX_CONNECTIONS; i++)
+        hap_expire_unverified();
+        for (int i = 0; i < HAP_MAX_CONNECTIONS; i++)
             if (clients[i].fd >= 0 && clients[i].closing) drop(&clients[i]);
 
         if ((int32_t)(hap_port_millis() - next_update) >= 0) {

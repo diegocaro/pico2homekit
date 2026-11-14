@@ -22,6 +22,11 @@ bool mibeacon_frame_mac(const uint8_t *sd, size_t len, uint8_t mac[6]) {
     return true;
 }
 
+// Readings outside what the sensor can measure (or NaN/inf from the float objects)
+// are dropped: they would end up as invalid JSON ("nan") or nonsense in HomeKit.
+static bool temp_ok(float t) { return t >= -40.0f && t <= 100.0f; }   // false for NaN too
+static bool hum_ok(float h) { return h >= 0.0f && h <= 100.0f; }
+
 static void parse_objects(const uint8_t *p, size_t len, mibeacon_reading_t *out) {
     size_t i = 0;
     while (i + 3 <= len) {
@@ -58,6 +63,9 @@ static void parse_objects(const uint8_t *p, size_t len, mibeacon_reading_t *out)
         }
         i += 3 + n;
     }
+    if (out->has_temperature && !temp_ok(out->temperature_c)) out->has_temperature = false;
+    if (out->has_humidity && !hum_ok(out->humidity_pct)) out->has_humidity = false;
+    if (out->has_battery && out->battery_pct > 100) out->has_battery = false;
 }
 
 mibeacon_result_t mibeacon_parse(const uint8_t *sd, size_t len, const uint8_t mac[6],
@@ -80,6 +88,9 @@ mibeacon_result_t mibeacon_parse(const uint8_t *sd, size_t len, const uint8_t ma
     if (i > len) return MIBEACON_MALFORMED;
 
     if (!(fc & FC_ENCRYPTED)) {
+        // A sensor that has a bind key always encrypts. Accepting plaintext frames
+        // for it would let anyone in Bluetooth range inject readings.
+        if (key) return MIBEACON_NOT_ENCRYPTED;
         parse_objects(sd + i, len - i, out);
     } else {
         if (version < 4) return MIBEACON_UNSUPPORTED;
@@ -108,6 +119,10 @@ mibeacon_result_t mibeacon_parse(const uint8_t *sd, size_t len, const uint8_t ma
                                           sd + i, plain, mic, 4);
         mbedtls_ccm_free(&ccm);
         if (rc != 0) return MIBEACON_DECRYPT_FAILED;
+        // 32-bit packet counter, authenticated as part of the nonce: lets the
+        // caller reject replayed frames.
+        out->counter = (uint32_t)sd[4] | (uint32_t)ext[0] << 8 | (uint32_t)ext[1] << 16 | (uint32_t)ext[2] << 24;
+        out->has_counter = true;
         parse_objects(plain, clen, out);
     }
 
@@ -123,6 +138,7 @@ const char *mibeacon_result_str(mibeacon_result_t r) {
     case MIBEACON_UNSUPPORTED: return "unsupported encryption";
     case MIBEACON_NO_KEY: return "no key";
     case MIBEACON_DECRYPT_FAILED: return "decryption failed (wrong key?)";
+    case MIBEACON_NOT_ENCRYPTED: return "unencrypted frame for a sensor with a bind key (ignored)";
     }
     return "?";
 }

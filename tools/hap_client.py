@@ -195,6 +195,10 @@ class Session:
     def pair_setup(self, code, ctrl):
         """Returns (accessory_id, accessory_ltpk), or the TLV error code (int)."""
         r = self.tlv("/pair-setup", [(T_STATE, 1), (T_METHOD, 0)])
+        while r.get(T_ERROR) == b"\x03":            # Backoff: wait RetryDelay seconds, like iOS
+            self.backoff_seen = r[0x08][0]
+            time.sleep(r[0x08][0])
+            r = self.tlv("/pair-setup", [(T_STATE, 1), (T_METHOD, 0)])
         if T_ERROR in r:
             return r[T_ERROR][0]
         salt, B = r[T_SALT], r[T_PUBLIC_KEY]
@@ -231,6 +235,34 @@ class Session:
         x_acc = hkdf(K, "Pair-Setup-Accessory-Sign-Salt", "Pair-Setup-Accessory-Sign-Info")
         Ed25519PublicKey.from_public_bytes(acc_ltpk).verify(sub[T_SIGNATURE], x_acc + acc_id + acc_ltpk)
         return acc_id, acc_ltpk
+
+    def pair_verify_smuggle(self, ctrl, acc_ltpk, extra):
+        """Sends Pair Verify M3 and `extra` (plaintext) in ONE write, as a man in the
+        middle could. Returns everything received after M4 within 2 s."""
+        sk = X25519PrivateKey.generate()
+        pk = raw_pub(sk.public_key())
+        r = self.tlv("/pair-verify", [(T_STATE, 1), (T_PUBLIC_KEY, pk)])
+        acc_pk = r[T_PUBLIC_KEY]
+        key = hkdf(sk.exchange(X25519PublicKey.from_public_bytes(acc_pk)),
+                   "Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info")
+        sig = ctrl.ltsk.sign(pk + ctrl.id + acc_pk)
+        enc = ChaCha20Poly1305(key).encrypt(bytes(4) + b"PV-Msg03",
+                                            tlv_encode([(T_IDENTIFIER, ctrl.id), (T_SIGNATURE, sig)]), None)
+        body = tlv_encode([(T_STATE, 3), (T_ENCRYPTED, enc)])
+        self.sock.sendall(f"POST /pair-verify HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body + extra)
+        status, _, _ = self.read_message()
+        assert status.startswith("HTTP/1.1 200"), status
+        rest = self.buf
+        self.sock.settimeout(2)
+        try:
+            while True:
+                d = self.sock.recv(65536)
+                if not d:
+                    break
+                rest += d
+        except OSError:
+            pass
+        return rest
 
     def pair_verify(self, ctrl, acc_ltpk):
         """Returns True on success, or the TLV error code."""
@@ -283,6 +315,8 @@ def run(host, port, code, real_device=False):
         s = Session(host, port)
     res = s.pair_setup(code, admin)
     check(isinstance(res, tuple), f"pair setup with the right code succeeds (M3 took {s.m3_seconds:.1f} s)")
+    if not real_device:
+        check(getattr(s, "backoff_seen", 0) >= 1, "a retry right after a wrong code is told to back off")
     acc_id, acc_ltpk = res
     print(f"       accessory id {acc_id.decode()}")
     s.close()
@@ -293,6 +327,22 @@ def run(host, port, code, real_device=False):
 
     print("Pair Verify and session")
     s = Session(host, port)
+    if not real_device:
+        # A man in the middle appends a plaintext "add pairing" (attacker key, admin)
+        # to the iPhone's Pair Verify M3. It must not run with the iPhone's rights.
+        evil = Controller("attacker")
+        body = tlv_encode([(T_STATE, 1), (T_METHOD, 3), (T_IDENTIFIER, evil.id),
+                           (T_PUBLIC_KEY, evil.ltpk), (T_PERMISSIONS, 1)])
+        smuggled = f"POST /pairings HTTP/1.1\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body
+        m = Session(host, port)
+        m.pair_verify_smuggle(admin, acc_ltpk, smuggled)
+        m.close()
+        v = Session(host, port)
+        v.pair_verify(admin, acc_ltpk)
+        r = tlv_decode(v.request("POST", "/pairings", tlv_encode([(T_STATE, 1), (T_METHOD, 5)]))[2])
+        v.close()
+        check(evil.id not in [val for t, val in r if t == T_IDENTIFIER],
+              "plaintext request smuggled after Pair Verify M3 is not executed")
     code_, _, _ = s.request("GET", "/accessories")
     check(code_ == 470, "/accessories without a session -> 470")
     check(s.pair_verify(admin, acc_ltpk) is True, "pair verify succeeds")
@@ -327,6 +377,15 @@ def run(host, port, code, real_device=False):
 
         code_, _ = s.json("PUT", "/characteristics", {"characteristics": [{"aid": 1, "iid": 2, "value": True}]})
         check(code_ == 204, "identify write -> 204")
+
+    if not real_device:
+        idle = [socket.create_connection((host, port)) for _ in range(12)]   # more than the 8 slots
+        time.sleep(0.3)
+        late = Session(host, port)
+        check(late.pair_verify(admin, acc_ltpk) is True, "a controller still gets in while idle connections fill every slot")
+        late.close()
+        for x in idle:
+            x.close()
 
     print("Pairings")
     r = tlv_decode(s.request("POST", "/pairings", tlv_encode([(T_STATE, 1), (T_METHOD, 5)]))[2])

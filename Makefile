@@ -6,7 +6,7 @@ CMAKE := $(PICO_ROOT)/cmake/cmake-3.31.6-macos-universal/CMake.app/Contents/bin/
 NINJA := $(PICO_ROOT)/ninja/ninja
 
 .DEFAULT_GOAL := all
-.PHONY: all flash monitor clean test hap-test mac-ble
+.PHONY: all flash monitor clean test hap-test mac-ble fuzz
 
 # Host-side unit tests (Apple clang), using the SDK's mbedTLS sources.
 MBEDTLS := $(PICO_SDK_PATH)/lib/mbedtls
@@ -39,6 +39,26 @@ build-host/venv:
 
 hap-test: build-host/hap_host build-host/venv
 	build-host/venv/bin/python tools/hap_client.py --spawn build-host/hap_host
+
+# Security testing: the same server and the BLE/TLV parsers built with AddressSanitizer
+# and UndefinedBehaviorSanitizer, fed malformed and random input (about 1.5 minutes).
+SAN := -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+build-host/hap_host_asan: $(HAP_SRC) tests/hap_host.c src/hap/*.h src/*.h tests/host_config/config.h
+	@mkdir -p build-host
+	cc $(SAN) -Wall -Wno-unused-parameter -Isrc -Itests/host_config -I$(MONO) -I$(MBEDTLS)/include \
+	  -I$(PICO_SDK_PATH)/src/rp2_common/pico_mbedtls/include -DMBEDTLS_CONFIG_FILE='"pico_mbedtls_config.h"' \
+	  tests/hap_host.c $(HAP_SRC) -o $@
+build-host/fuzz_parsers: tests/fuzz_parsers.c src/mibeacon.c src/hap/tlv8.c
+	@mkdir -p build-host
+	cc $(SAN) -Isrc -I$(MBEDTLS)/include -I$(PICO_SDK_PATH)/src/rp2_common/pico_mbedtls/include \
+	  -DMBEDTLS_CONFIG_FILE='"pico_mbedtls_config.h"' tests/fuzz_parsers.c src/mibeacon.c src/hap/tlv8.c \
+	  $(MBEDTLS)/library/aes.c $(MBEDTLS)/library/aesni.c $(MBEDTLS)/library/aesce.c $(MBEDTLS)/library/ccm.c \
+	  $(MBEDTLS)/library/cipher.c $(MBEDTLS)/library/cipher_wrap.c $(MBEDTLS)/library/platform_util.c \
+	  $(MBEDTLS)/library/constant_time.c -o $@
+fuzz: build-host/hap_host_asan build-host/fuzz_parsers build-host/venv
+	./build-host/fuzz_parsers 2000000
+	ASAN_OPTIONS=detect_leaks=0 build-host/venv/bin/python tools/hap_client.py --spawn build-host/hap_host_asan
+	python3 tests/fuzz_hap.py build-host/hap_host_asan 60
 
 # Read the thermometers with the Mac's own Bluetooth (no Pico). `make mac-ble` builds and runs it.
 # macOS kills Bluetooth programs without a usage description, so a minimal Info.plist is embedded.

@@ -45,18 +45,29 @@ static void handle_mibeacon(const uint8_t mac[6], const uint8_t *sd, size_t len)
     sensor_t *s = sensors_find(mac);
     if (!s) { note_unknown(mac); return; }
 
-    // Each frame is repeated many times; only decrypt new ones.
+    // Each frame is repeated many times; only decrypt new ones. last_frame only
+    // moves after a frame authenticates, so forged frames cannot suppress real ones.
     int fc = mibeacon_frame_counter(sd, len);
     if (fc < 0 || fc == s->last_frame) return;
-    s->last_frame = fc;
 
     mibeacon_reading_t r;
     mibeacon_result_t res = mibeacon_parse(sd, len, mac, s->key, &r);
-    if (res == MIBEACON_NO_DATA) return;
+    if (res == MIBEACON_NO_DATA) { if (r.has_counter) s->last_frame = fc; return; }
     if (res != MIBEACON_OK) {
-        printf("ble: %s: %s\n", s->name, mibeacon_result_str(res));
+        static uint32_t next_report;   // forged/garbled frames: don't flood the log
+        if ((int32_t)(now_ms() - next_report) >= 0) {
+            printf("ble: %s: %s\n", s->name, mibeacon_result_str(res));
+            next_report = now_ms() + 10000;
+        }
         return;
     }
+    // Replay protection: the authenticated packet counter must increase. A sensor
+    // whose counter restarted (new battery) is accepted again after 30 min.
+    if (r.has_counter && s->has_counter && r.counter <= s->last_counter &&
+        now_ms() - s->last_update_ms < 30u * 60u * 1000u)
+        return;
+    s->last_frame = fc;
+    if (r.has_counter) { s->last_counter = r.counter; s->has_counter = true; }
     if (sensors_update(s, &r, now_ms())) {
         printf("%-12s", s->name);
         if (s->has_temperature) printf("  %5.1f C", s->temperature_c);
