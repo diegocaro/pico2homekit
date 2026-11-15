@@ -77,8 +77,6 @@ static void handle_mibeacon(const uint8_t mac[6], const uint8_t *sd, size_t len)
         printf("\n");
         bridge_sensor_updated((int)(s - sensors_get(0)));
     }
-    static bool led;
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led = !led);
 }
 
 static void packet_handler(uint8_t type, uint16_t channel, uint8_t *packet, uint16_t size) {
@@ -220,16 +218,71 @@ static void serial_task(void) {
     }
 }
 
-// Blink the LED for 3 s when HomeKit asks the accessory to identify itself.
-static void identify_task(void) {
-    static uint32_t until, next_toggle;
-    static bool on;
-    if (bridge_take_identify_request()) until = now_ms() + 3000;
-    if (until && (int32_t)(now_ms() - next_toggle) >= 0) {
-        if ((int32_t)(now_ms() - until) >= 0) { until = 0; on = false; }
-        else on = !on;
+// LED patterns (see README): fast blink = not ready yet (joining Wi-Fi or not paired),
+// heartbeat = all good, double blink = config error. Identify (3 s of very fast
+// blinking, requested from the Home app) overrides them.
+typedef enum { LED_CONFIG_ERROR, LED_NOT_READY, LED_OK } led_mode_t;
+
+static const char *const led_mode_names[] = {
+    [LED_CONFIG_ERROR] = "config error (double blink)",
+    [LED_NOT_READY] = "not ready (fast blink)",
+    [LED_OK] = "all good (heartbeat every 5 s)",
+};
+
+static bool led_pattern(led_mode_t m, uint32_t t) {
+    switch (m) {
+    case LED_CONFIG_ERROR: { uint32_t p = t % 2000; return p < 150 || (p >= 300 && p < 450); }
+    case LED_NOT_READY: return t % 500 < 250;
+    case LED_OK: return t % 5000 < 150;
+    }
+    return false;
+}
+
+// The LED belongs to the Wi-Fi chip: only talk to it when the state changes.
+static void led_put(bool on) {
+    static int current = -1;
+    if (current != (int)on) {
+        current = on;
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on);
-        next_toggle = now_ms() + 150;
+    }
+}
+
+static void led_task(void) {
+    static uint32_t identify_until;
+    static int last_state = -1;
+    if (bridge_take_identify_request()) identify_until = now_ms() + 3000;
+    if (identify_until && (int32_t)(now_ms() - identify_until) < 0) {
+        led_put(now_ms() / 80 % 2);    // Identify from the Home app: very fast blinking for 3 s
+        return;
+    }
+    identify_until = 0;
+    // state 0: joining Wi-Fi, 1: waiting to be added in Home, 2: all good
+    int state = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) != CYW43_LINK_UP ? 0
+              : !hap_is_paired() ? 1 : 2;
+    led_mode_t m = state == 2 ? LED_OK : LED_NOT_READY;
+    if (state != last_state) {
+        last_state = state;
+        static const char *const why[] = {": joining Wi-Fi", ": waiting to be added in the Home app", ""};
+        printf("led: %s%s\n", led_mode_names[m], why[state]);
+    }
+    led_put(led_pattern(m, now_ms()));
+}
+
+// A bad config/config.h: blink the error pattern forever and repeat the message
+// every 10 s, so a serial monitor attached later still sees it.
+static void config_error(const char *msg) {
+    printf("%s\n", msg);
+    if (cyw43_arch_init()) while (true) sleep_ms(1000);
+    printf("led: %s\n", led_mode_names[LED_CONFIG_ERROR]);
+    uint32_t next_msg = now_ms() + 10000;
+    while (true) {
+        cyw43_arch_poll();
+        led_put(led_pattern(LED_CONFIG_ERROR, now_ms()));
+        if ((int32_t)(now_ms() - next_msg) >= 0) {
+            printf("%s\n", msg);
+            next_msg = now_ms() + 10000;
+        }
+        sleep_ms(10);
     }
 }
 
@@ -240,10 +293,7 @@ int main(void) {
     sleep_ms(200);
     printf("\npico2homekit starting, version %s\n", GIT_VERSION);
 
-    if (!sensors_init()) {
-        printf("fix config/config.h and reflash\n");
-        while (true) sleep_ms(1000);
-    }
+    if (!sensors_init()) config_error("fix the sensor list in config/config.h and reflash");
     for (int i = 0; i < sensors_count(); i++) {
         printf("sensor %d: %s ", i, sensors_get(i)->name);
         print_mac(sensors_get(i)->mac);
@@ -253,10 +303,7 @@ int main(void) {
         printf("homekit: only the first %d sensors are exposed\n", BRIDGE_MAX_SENSORS);
 
     bridge_init(HAP_BRIDGE_NAME);
-    if (!hap_init(HAP_SETUP_CODE)) {
-        printf("fix HAP_SETUP_CODE in config/config.h and reflash\n");
-        while (true) sleep_ms(1000);
-    }
+    if (!hap_init(HAP_SETUP_CODE)) config_error("fix HAP_SETUP_CODE in config/config.h and reflash");
     print_status();
 
     if (cyw43_arch_init()) {
@@ -276,7 +323,7 @@ int main(void) {
         wifi_task();
         hap_server_poll();
         serial_task();
-        identify_task();
+        led_task();
         if (!ble_on && (cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA) == CYW43_LINK_UP ||
                         now_ms() > 90000)) {
             hci_power_control(HCI_POWER_ON);

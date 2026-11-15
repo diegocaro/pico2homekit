@@ -79,17 +79,19 @@ Commands you can type in `make monitor`:
 Each thermometer sends temperature, humidity and battery in separate broadcasts, so after a
 reboot it takes about 30 seconds for values to appear (battery can take a few minutes).
 
+## LED
+
+| LED | Meaning |
+|---|---|
+| Fast blink | not ready yet: joining Wi-Fi, or waiting to be added in Home |
+| Short blink every 5 seconds | all good |
+| Double blink | error in `config/config.h` |
+
+More in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#the-led).
+
 ## Troubleshooting
 
-- **"Setup code incorrect"**: check the code against `make monitor` → `status`. After several
-  wrong tries the Pico makes you wait (up to 60 s) between attempts.
-- **Bridge shows "No Response" forever** after you removed it from Home while the Pico was off:
-  run `unpair` in `make monitor` and add it again.
-- **A thermometer never shows a value**: check its MAC and bind key with `make mac-ble`, which
-  prints `decryption failed (wrong key?)` for a wrong key.
-- **No serial port found**: the Pico is still in BOOTSEL (a drive called `RPI-RP2` is mounted)
-  or the cable is charge-only.
-- **`make flash` can't reboot the Pico**: quit `make monitor` first; it keeps the port busy.
+See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## More documentation
 
@@ -98,6 +100,7 @@ reboot it takes about 30 seconds for values to appear (battery can take a few mi
 | [docs/SETUP.md](docs/SETUP.md) | Installing the toolchain on a Mac |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every setting in `config/config.h` and what changing it does |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the firmware is put together, flash layout, tests |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | What to do when something does not work |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, protections, fuzzing, known limits |
 | [docs/MAC_BLE.md](docs/MAC_BLE.md) | How the Mac thermometer reader works |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Third-party libraries and their licences |
