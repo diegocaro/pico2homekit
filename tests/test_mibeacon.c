@@ -1,5 +1,5 @@
 // Host unit test for the MiBeacon parser: `make test`.
-// Vectors from github.com/Bluetooth-Devices/xiaomi-ble tests (MIT).
+// Vectors from github.com/Bluetooth-Devices/xiaomi-ble tests (Apache-2.0).
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
