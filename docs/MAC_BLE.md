@@ -6,7 +6,37 @@ readings. It uses the same C code as the Pico firmware (`src/mibeacon.c`, `src/s
 and the same `config/config.h`, so it's also a quick way to check your MACs and bind keys
 without flashing anything.
 
-Build and run it with `/usr/bin/make mac-ble` (see [README.md](README.md)).
+## Running it
+
+It needs the toolchain from [SETUP.md](SETUP.md) (for the Pico SDK's mbedTLS sources), the Xcode
+Command Line Tools, and your `config/config.h`. From the project folder, build (if needed) and
+run it; stop it with Ctrl-C:
+
+```bash
+make mac-ble
+```
+
+To only build it (output in `build-host/mac_ble`):
+
+```bash
+make build-host/mac_ble
+```
+
+The first time, macOS asks whether `mac_ble` may use Bluetooth: allow it. If you said no,
+re-enable it in System Settings → Privacy & Security → Bluetooth.
+
+Example output:
+
+```
+scanning...
+Oficina      53.9 %RH   (rssi -54)
+Living       59.8 %RH   (rssi -75)
+Oficina      26.6 C   53.9 %RH   (rssi -47)
+Bedroom      24.8 C   (rssi -81)
+```
+
+Each thermometer sends one measurement per broadcast, so it takes roughly 30 seconds for every
+value to show up (battery can take a few minutes).
 
 ## 1. The thermometers only broadcast
 

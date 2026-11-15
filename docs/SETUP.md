@@ -1,7 +1,15 @@
 # Toolchain setup (macOS)
 
-How to set up a Mac to build this project from scratch. Needs no Homebrew and no sudo.
-Everything goes into `~/.pico-sdk`, about 1.6 GB. The `Makefile` expects exactly these paths.
+How to set up a Mac to build this project from scratch. The build tools need no Homebrew and
+no sudo; only the optional serial console (minicom, step 8) is installed with a package manager.
+Everything goes into `~/.pico-sdk`, about 1.6 GB. The `Makefile` expects exactly these paths:
+
+| Component | Path |
+|---|---|
+| Pico SDK 2.2.0 | `~/.pico-sdk/sdk/2.2.0` |
+| xPack arm-none-eabi-gcc 14.2.1 | `~/.pico-sdk/toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1` |
+| CMake 3.31.6 | `~/.pico-sdk/cmake/` |
+| Ninja 1.12.1 | `~/.pico-sdk/ninja/` |
 
 ## 1. Xcode Command Line Tools
 
@@ -73,43 +81,36 @@ git -C ~/.pico-sdk/sdk/2.2.0 submodule update --init --depth 1
 Nothing to do. On the first build, the SDK downloads and builds picotool into `build/_deps/`.
 That first build needs internet access.
 
-## 8. Project config
+## 8. minicom
+
+Only needed for `make monitor`, the interactive serial console. `make log` works without it.
+Install it with MacPorts or Homebrew (both need admin rights once):
 
 ```bash
-cp config/config.example.h config/config.h
+sudo port install minicom
 ```
 
-Then edit `config/config.h` and fill in:
-- your Wi-Fi SSID and password (the Pico W only supports 2.4 GHz)
-- for each thermometer: its name, MAC address and bind key.
-
-The bind keys came from the Xiaomi Cloud token extractor, saved to `tmp/keys.txt`. Both `tmp/` and `config/config.h` are git-ignored,
-so copy them to the other Mac yourself (e.g. AirDrop). Don't commit them.
-
-## 9. Build, test, flash
-
-Run these from the project root. If `make` misbehaves in zsh (`function definition file not found`),
-use `/usr/bin/make` as shown.
+or
 
 ```bash
-/usr/bin/make
+brew install minicom
 ```
 
-```bash
-/usr/bin/make test
-```
+## 9. Check that it builds
 
-Hold BOOTSEL while plugging the Pico W in, then:
+From the project folder (after creating `config/config.h`, see the [README](../README.md#quick-start)):
 
 ```bash
-/usr/bin/make flash
+make
 ```
 
 ```bash
-/usr/bin/make monitor
+make test
 ```
 
-Quit the monitor with Ctrl-A then K.
+The first build takes a few minutes and needs internet access for picotool.
+
+Then continue with flashing in the [README](../README.md#quick-start).
 
 ## Uninstall
 

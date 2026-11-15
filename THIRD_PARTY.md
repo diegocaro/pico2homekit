@@ -9,7 +9,7 @@ actually ends up in `pico2homekit.uf2` is listed under "In the firmware".
 | Component | Version | What it does here | Licence | Location |
 |---|---|---|---|---|
 | **Monocypher** | 4.0.2 | HomeKit crypto: Ed25519 signatures, X25519 key exchange, ChaCha20-Poly1305, SHA-512, HKDF | CC0-1.0 **or** BSD-2-Clause (your choice) | `third_party/monocypher/` (vendored, unmodified) |
-| **Raspberry Pi Pico SDK** | 2.2.0 | Boot code, hardware drivers, USB serial, flash access, timers, random numbers, `printf` | BSD-3-Clause | `~/.pico-sdk/sdk/2.2.0` (see [SETUP.md](SETUP.md)) |
+| **Raspberry Pi Pico SDK** | 2.2.0 | Boot code, hardware drivers, USB serial, flash access, timers, random numbers, `printf` | BSD-3-Clause | `~/.pico-sdk/sdk/2.2.0` (see [docs/SETUP.md](docs/SETUP.md)) |
 | ↳ `pico_printf` | (in SDK) | Small `printf` implementation | MIT (Marco Paland) | SDK `src/rp2_common/pico_printf/` |
 | **cyw43-driver** | commit `dd75682` | Driver for the Pico W's Infineon CYW43439 Wi-Fi/Bluetooth chip | Raspberry Pi licence (`LICENSE.RP`): use and redistribution **only with Raspberry Pi chips** (RP2040, RP2350) | SDK `lib/cyw43-driver/` |
 | ↳ CYW43439 firmware blobs | Wi-Fi 7.95.49, BT patch, NVRAM | Closed-source firmware the driver uploads into the radio chip at boot (about 230 KB of the image) | Distributed with cyw43-driver under the same terms | SDK `lib/cyw43-driver/firmware/` |
@@ -55,7 +55,7 @@ standard helper file from the Pico SDK (BSD-3-Clause).
 ## Re-running the audit
 
 ```bash
-/usr/bin/make
+make
 grep -c 'third_party\|/lib/' build/pico2homekit.elf.map   # what was offered to the linker
 ~/.pico-sdk/toolchain/xpack-arm-none-eabi-gcc-14.2.1-1.1/bin/arm-none-eabi-nm -S --size-sort build/pico2homekit.elf | tail -20
 ```
