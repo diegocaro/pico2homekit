@@ -87,3 +87,8 @@ Something not working? See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, protections, fuzzing, known limits |
 | [docs/MAC_BLE.md](docs/MAC_BLE.md) | How the Mac thermometer reader works |
 | [THIRD_PARTY.md](THIRD_PARTY.md) | Third-party libraries and their licences |
+
+## License
+
+MIT, see [LICENSE](LICENSE). Third-party libraries keep their own licences, including
+Raspberry Pi-only terms for the Wi-Fi/Bluetooth driver and BTstack: [THIRD_PARTY.md](THIRD_PARTY.md).

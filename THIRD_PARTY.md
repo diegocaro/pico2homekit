@@ -36,8 +36,8 @@ CCM, cipher glue and bignum (`src/mbedtls_config.h` enables only those).
   `src/rp2_common/pico_btstack/LICENSE.RP` (the Raspberry Pi BTstack grant) together with
   `lib/btstack/LICENSE`, `lib/lwip/COPYING`, `lib/mbedtls/LICENSE`, `lib/tinyusb/LICENSE`,
   `third_party/monocypher/LICENCE.md`, and newlib's `COPYING.NEWLIB` (in the xPack toolchain under `distro-info/licenses/newlib-4.4.0/`).
-- **This project's own code has no licence yet.** Until one is chosen, others may not legally
-  reuse or modify `src/`, `tools/` and `tests/`.
+- **This project's own code is MIT-licensed** ([LICENSE](LICENSE)). That covers `src/`, `tools/`,
+  `tests/` and the docs, not the third-party components above, which keep their own licences.
 
 ## Only for development and testing (not in the firmware)
 
