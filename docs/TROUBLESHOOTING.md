@@ -78,9 +78,14 @@ few minutes to appear after a reboot.
   BOOTSEL while plugging in and flash again.
 - **`minicom not found`**: install it ([SETUP.md](SETUP.md#8-minicom)) or use `make log`.
 
-## Starting over
+## Serial commands
 
-| Command (in `make monitor`) | Effect |
+Type these in `make monitor` and press Enter:
+
+| Command | Effect |
 |---|---|
-| `unpair` | forgets all paired iPhones/homes; the bridge keeps its identity. Add it again in Home. |
+| `status` | firmware version (git commit, `-dirty` if built with uncommitted changes), setup code, device id, pairings, open sessions |
+| `debug` | toggle the protocol log: every request, pairing step, response and event (off again after a reboot) |
+| `selftest` | re-run the SRP known-answer test (about 12 s; pauses HomeKit meanwhile) |
+| `unpair` | forget all paired iPhones and homes; the bridge keeps its identity. Add it again in Home. |
 | `reset` | new HomeKit identity: Home sees a brand-new accessory. Remove the old one from Home first. |

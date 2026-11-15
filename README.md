@@ -14,7 +14,7 @@ low-battery alert. Up to 8 thermometers per Pico.
 - **Xiaomi LYWSD03MMC** thermometers on their stock firmware.
 - Each thermometer's **MAC address and bind key** (see below).
 - A **2.4 GHz Wi-Fi** network (the Pico W has no 5 GHz).
-- A **Mac** to build and flash. Linux should work with small path changes; it is not tested.
+- A **Mac** (Apple Silicon or Intel) to build and flash. The build is macOS-only.
 
 ### Getting the bind keys
 
@@ -30,7 +30,8 @@ Keep the keys private. Re-adding a thermometer to Mi Home gives it a new key.
 
 ## Quick start
 
-1. **Install the toolchain** (one time, no Homebrew or sudo needed): [docs/SETUP.md](docs/SETUP.md).
+1. **Install the toolchain** (one time): [docs/SETUP.md](docs/SETUP.md). The build tools need no
+   Homebrew or sudo; only the optional serial console (minicom) comes from Homebrew or MacPorts.
 2. **Configure.** From the project folder:
    ```bash
    cp config/config.example.h config/config.h
@@ -47,14 +48,13 @@ Keep the keys private. Re-adding a thermometer to Mi Home gives it a new key.
    ```bash
    make log
    ```
-   You should see it join Wi-Fi, print the setup code, and then thermometer readings.
+   You should see the setup code, then the Pico joining Wi-Fi, then thermometer readings. Each
+   thermometer sends one value per broadcast, so it takes about 30 seconds for all values to
+   appear (battery can take a few minutes).
 5. **Add it to Apple Home:**
    1. Home app: **+**, **Add Accessory**, **More options…**, then **Pico Bridge** (or your name).
    2. iOS warns that it is not certified: **Add Anyway**.
    3. Enter your setup code. The step after the code takes about 8 seconds on the Pico.
-
-The first boot after changing the setup code takes about 15 seconds longer (self-test and SRP
-verifier). Pairings are kept in flash across reboots and reflashes.
 
 ## Everyday use
 
@@ -63,21 +63,8 @@ verifier). Pairings are kept in flash across reboots and reflashes.
 | `make` | build `build/pico2homekit.uf2` |
 | `make flash` | build and copy the firmware to the Pico |
 | `make log` | print the Pico's serial output; keeps going across reboots; stop with Ctrl-C |
-| `make monitor` | interactive serial console in [minicom](docs/SETUP.md#8-minicom) to type commands; quit with Ctrl-A then X |
+| `make monitor` | interactive serial console in [minicom](docs/SETUP.md#8-minicom); type `status` to see the version and pairings ([all commands](docs/TROUBLESHOOTING.md#serial-commands)); quit with Ctrl-A then X |
 | `make mac-ble` | read the thermometers with the Mac's Bluetooth, no Pico needed ([docs/MAC_BLE.md](docs/MAC_BLE.md)) |
-
-Commands you can type in `make monitor`:
-
-| Command | Effect |
-|---|---|
-| `status` | firmware version (git commit, `-dirty` if built with uncommitted changes), setup code, device id, pairings, open sessions |
-| `debug` | toggle the protocol log: every request, pairing step, response and event (off again after a reboot) |
-| `selftest` | re-run the SRP known-answer test (about 12 s; pauses HomeKit meanwhile) |
-| `unpair` | forget all controllers (then add the bridge again in Home) |
-| `reset` | new HomeKit identity; Home sees a brand-new accessory |
-
-Each thermometer sends temperature, humidity and battery in separate broadcasts, so after a
-reboot it takes about 30 seconds for values to appear (battery can take a few minutes).
 
 ## LED
 
@@ -87,11 +74,7 @@ reboot it takes about 30 seconds for values to appear (battery can take a few mi
 | Short blink every 5 seconds | all good |
 | Double blink | error in `config/config.h` |
 
-More in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#the-led).
-
-## Troubleshooting
-
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+Something not working? See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## More documentation
 
